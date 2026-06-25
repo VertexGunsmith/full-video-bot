@@ -20,7 +20,7 @@ VIDEOS = [
         "duration": "10 минут",
         "price": 3000,
         "price_str": "3 000",
-        "photo_id": "СЮДА_FILE_ID_КАРТИНКИ"
+        "photo_id": "СЮДА_FILE_ID_КАРТИНКИ",
         "file_id": "AAMCAgADGQEDQS37ajyVePh8Jn534YBGHULxOJnKuccAAkqUAAJ6selJbdIHc_ZjXcQBAAdtAAM8BA"
     },
     # Добавь остальные видео по той же схеме
