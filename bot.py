@@ -21,7 +21,7 @@ VIDEOS = [
         "price": 3000,
         "price_str": "3 000",
         "photo_id": "",
-        "file_id": "AAMCAgADGQEDQS37ajyVePh8Jn534YBGHULxOJnKuccAAkqUAAJ6selJbdIHc_ZjXcQBAAdtAAM8BA"
+        "file_id": ""
     },
     # Добавь остальные видео по той же схеме
 ]
@@ -38,6 +38,8 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, video_id TEXT, amount INTEGER, created_at TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS video_photos
                  (video_id TEXT PRIMARY KEY, photo_id TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS video_files
+                 (video_id TEXT PRIMARY KEY, file_id TEXT)''')
     conn.commit()
     conn.close()
 
@@ -52,6 +54,21 @@ def get_video_photo(video_id):
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
     c.execute('SELECT photo_id FROM video_photos WHERE video_id=?', (str(video_id),))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+def set_video_file(video_id, file_id):
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    c.execute('INSERT OR REPLACE INTO video_files VALUES (?,?)', (str(video_id), file_id))
+    conn.commit()
+    conn.close()
+
+def get_video_file(video_id):
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    c.execute('SELECT file_id FROM video_files WHERE video_id=?', (str(video_id),))
     row = c.fetchone()
     conn.close()
     return row[0] if row else None
@@ -254,6 +271,23 @@ async def set_photo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     context.user_data['setting_photo_for'] = parts[1]
     await update.message.reply_text(f"Ок! Теперь отправь картинку для видео №{parts[1]}")
 
+async def set_video_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_ID:
+        return
+    parts = update.message.text.split()
+    if len(parts) < 2:
+        await update.message.reply_text("Напиши так: /setvideo 1 — а потом отправь видео")
+        return
+    context.user_data['setting_video_for'] = parts[1]
+    await update.message.reply_text(f"Ок! Теперь отправь видео для №{parts[1]}")
+
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id == ADMIN_ID and context.user_data.get('setting_video_for'):
+        vid = context.user_data.pop('setting_video_for')
+        file_id = update.message.video.file_id
+        set_video_file(vid, file_id)
+        await update.message.reply_text(f"✅ Видео для №{vid} сохранено!")
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id == ADMIN_ID and context.user_data.get('setting_photo_for'):
         vid = context.user_data.pop('setting_photo_for')
@@ -336,10 +370,13 @@ async def handle_approve_reject(update: Update, context: ContextTypes.DEFAULT_TY
         if video_id == "bundle":
             add_purchase(user_id, 'bundle', BUNDLE_PRICE)
             for video in VIDEOS:
+                file_to_send = get_video_file(video['id']) or video['file_id']
+                if not file_to_send:
+                    continue
                 try:
                     await context.bot.send_video(
                         chat_id=user_id,
-                        video=video['file_id'],
+                        video=file_to_send,
                         caption=f"🎬 {video['title']}\n⏱ {video['duration']}\n\nСпасибо за покупку! 🎉"
                     )
                 except Exception as e:
@@ -348,10 +385,11 @@ async def handle_approve_reject(update: Update, context: ContextTypes.DEFAULT_TY
             video = next((v for v in VIDEOS if str(v['id']) == video_id), None)
             if video:
                 add_purchase(user_id, video_id, video['price'])
+                file_to_send = get_video_file(video['id']) or video['file_id']
                 try:
                     await context.bot.send_video(
                         chat_id=user_id,
-                        video=video['file_id'],
+                        video=file_to_send,
                         caption=f"🎬 {video['title']}\n⏱ {video['duration']}\n\nСпасибо за покупку! 🎉"
                     )
                 except Exception as e:
@@ -404,8 +442,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", show_stats))
     app.add_handler(CommandHandler("setphoto", set_photo_cmd))
+    app.add_handler(CommandHandler("setvideo", set_video_cmd))
     app.add_handler(MessageHandler(filters.Regex("^🎬 Каталог видео$"), show_catalog))
     app.add_handler(MessageHandler(filters.Regex("^📋 Мои покупки$"), show_my_purchases))
+    app.add_handler(MessageHandler(filters.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(handle_approve_reject, pattern="^(approve|reject)_"))
