@@ -5,6 +5,7 @@ import requests
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram import InputMediaPhoto
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -118,9 +119,22 @@ async def send_video_card(update, context, index, user_id):
     keyboard = get_video_keyboard(index, user_id)
     
     if update.message:
-        await update.message.reply_text(text, reply_markup=keyboard)
+        if video.get('photo_id'):
+            await update.message.reply_photo(
+                photo=video['photo_id'],
+                caption=text,
+                reply_markup=keyboard
+            )
+        else:
+            await update.message.reply_text(text, reply_markup=keyboard)
     else:
-        await update.callback_query.edit_message_text(text, reply_markup=keyboard)
+        if video.get('photo_id'):
+            await update.callback_query.edit_message_media(
+                media=InputMediaPhoto(media=video['photo_id'], caption=text),
+                reply_markup=keyboard
+            )
+        else:
+            await update.callback_query.edit_message_text(text, reply_markup=keyboard)
 
 async def show_my_purchases(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
