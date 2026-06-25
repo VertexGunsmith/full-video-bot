@@ -12,22 +12,10 @@ logger = logging.getLogger(__name__)
 ADMIN_ID = 7014721682
 TOKEN = "8816201288:AAFF2t8lBAygLwNc6LWfbSJb8uxhEtsZ6hA"
 
-VIDEOS = [
-    {
-        "id": 1,
-        "title": "ПРИСЕДАНИЯ",
-        "description": "Как правильно приседать",
-        "duration": "10 минут",
-        "price": 3000,
-        "price_str": "3 000",
-        "photo_id": "",
-        "file_id": ""
-    },
-    # Добавь остальные видео по той же схеме
-]
-
 BUNDLE_PRICE = 10000
 BUNDLE_PRICE_STR = "10 000"
+
+VIDEOS = []
 
 def init_db():
     conn = sqlite3.connect('bot.db')
@@ -36,42 +24,69 @@ def init_db():
                  (user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, created_at TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS purchases
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, video_id TEXT, amount INTEGER, created_at TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS video_photos
-                 (video_id TEXT PRIMARY KEY, photo_id TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS video_files
-                 (video_id TEXT PRIMARY KEY, file_id TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS catalog
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, duration TEXT, price INTEGER, photo_id TEXT, file_id TEXT)''')
     conn.commit()
     conn.close()
+
+def load_videos():
+    global VIDEOS
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    c.execute('SELECT id, title, description, duration, price, photo_id, file_id FROM catalog ORDER BY id')
+    rows = c.fetchall()
+    conn.close()
+    VIDEOS = []
+    for r in rows:
+        VIDEOS.append({
+            "id": r[0],
+            "title": r[1],
+            "description": r[2],
+            "duration": r[3],
+            "price": r[4],
+            "price_str": f"{r[4]:,}".replace(",", " "),
+            "photo_id": r[5] or "",
+            "file_id": r[6] or ""
+        })
+
+def add_video_db(title, description, duration, price):
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO catalog (title, description, duration, price, photo_id, file_id) VALUES (?,?,?,?,?,?)',
+              (title, description, duration, price, "", ""))
+    conn.commit()
+    new_id = c.lastrowid
+    conn.close()
+    load_videos()
+    return new_id
+
+def delete_last_video():
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    c.execute('SELECT id FROM catalog ORDER BY id DESC LIMIT 1')
+    row = c.fetchone()
+    if row:
+        c.execute('DELETE FROM catalog WHERE id=?', (row[0],))
+        conn.commit()
+    conn.close()
+    load_videos()
+    return row[0] if row else None
 
 def set_video_photo(video_id, photo_id):
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
-    c.execute('INSERT OR REPLACE INTO video_photos VALUES (?,?)', (str(video_id), photo_id))
+    c.execute('UPDATE catalog SET photo_id=? WHERE id=?', (photo_id, int(video_id)))
     conn.commit()
     conn.close()
-
-def get_video_photo(video_id):
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute('SELECT photo_id FROM video_photos WHERE video_id=?', (str(video_id),))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else None
+    load_videos()
 
 def set_video_file(video_id, file_id):
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
-    c.execute('INSERT OR REPLACE INTO video_files VALUES (?,?)', (str(video_id), file_id))
+    c.execute('UPDATE catalog SET file_id=? WHERE id=?', (file_id, int(video_id)))
     conn.commit()
     conn.close()
-
-def get_video_file(video_id):
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    c.execute('SELECT file_id FROM video_files WHERE video_id=?', (str(video_id),))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else None
+    load_videos()
 
 def add_user(user):
     conn = sqlite3.connect('bot.db')
@@ -85,7 +100,7 @@ def add_user(user):
 def add_purchase(user_id, video_id, amount):
     conn = sqlite3.connect('bot.db')
     c = conn.cursor()
-    c.execute('INSERT INTO purchases VALUES (?,?,?,?,?)', (None, user_id, video_id, amount, datetime.now().isoformat()))
+    c.execute('INSERT INTO purchases VALUES (?,?,?,?,?)', (None, user_id, str(video_id), amount, datetime.now().isoformat()))
     conn.commit()
     conn.close()
 
@@ -96,6 +111,12 @@ def get_user_purchases(user_id):
     rows = c.fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+def get_index_by_id(video_id):
+    for i, v in enumerate(VIDEOS):
+        if str(v['id']) == str(video_id):
+            return i
+    return None
 
 def get_video_keyboard(index, user_id):
     video = VIDEOS[index]
@@ -124,7 +145,6 @@ def get_video_keyboard(index, user_id):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     add_user(user)
-
     keyboard = [
         [KeyboardButton("🎬 Каталог видео")],
         [KeyboardButton("📋 Мои покупки")]
@@ -139,6 +159,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def show_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
+    if not VIDEOS:
+        await update.message.reply_text("Каталог пока пуст. Загляни позже!")
+        return
     await send_video_card(update, context, 0, user_id)
 
 async def send_video_card(update, context, index, user_id):
@@ -150,37 +173,30 @@ async def send_video_card(update, context, index, user_id):
         f"💰 Цена: {video['price_str']} ₽"
     )
     keyboard = get_video_keyboard(index, user_id)
-    photo_id = get_video_photo(video['id']) or video.get('photo_id')
+    photo_id = video.get('photo_id')
 
-    if update.message:
-        if photo_id:
-            try:
-                await update.message.reply_photo(photo=photo_id, caption=text, reply_markup=keyboard)
-                return
-            except Exception as e:
-                logger.error(f"Не удалось отправить фото: {e}")
-        await update.message.reply_text(text, reply_markup=keyboard)
-    else:
-        await update.callback_query.edit_message_text(text, reply_markup=keyboard)
+    if photo_id:
+        try:
+            await update.message.reply_photo(photo=photo_id, caption=text, reply_markup=keyboard)
+            return
+        except Exception as e:
+            logger.error(f"Не удалось отправить фото: {e}")
+    await update.message.reply_text(text, reply_markup=keyboard)
 
 async def show_my_purchases(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     purchases = get_user_purchases(user_id)
-
     if not purchases:
         await update.message.reply_text("📋 У вас пока нет покупок.\n\nНажмите 🎬 Каталог видео чтобы выбрать!")
         return
-
     if 'bundle' in purchases:
-        await update.message.reply_text("🎁 У вас есть доступ ко всем видео!\n\nНапишите /start чтобы получить видео.")
+        await update.message.reply_text("🎁 У вас есть доступ ко всем видео!")
         return
-
     text = "📋 Ваши покупки:\n\n"
     for p in purchases:
         for v in VIDEOS:
             if str(v['id']) == p:
                 text += f"✅ {v['title']}\n"
-
     await update.message.reply_text(text)
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -191,6 +207,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data.startswith("nav_"):
         index = int(data.split("_")[1])
+        if index >= len(VIDEOS):
+            return
         video = VIDEOS[index]
         text = (
             f"🎬 {video['title']}\n"
@@ -199,7 +217,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"💰 Цена: {video['price_str']} ₽"
         )
         keyboard = get_video_keyboard(index, user_id)
-        photo_id = get_video_photo(video['id']) or video.get('photo_id')
+        photo_id = video.get('photo_id')
         try:
             if photo_id:
                 await query.edit_message_media(
@@ -213,7 +231,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     elif data.startswith("buy_"):
         video_id = data.split("_")[1]
-
         if video_id == "bundle":
             context.user_data['buying'] = 'bundle'
             context.user_data['buying_price'] = BUNDLE_PRICE_STR
@@ -221,12 +238,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"🎁 Все видео — {BUNDLE_PRICE_STR} ₽\n\n"
                 f"Способ оплаты: На карту Т-Банк\n"
                 f"К оплате: {BUNDLE_PRICE_STR} 🇷🇺RUB\n\n"
-                f"Реквизиты:\n"
-                f"2200701046225592\n"
-                f"Т-банк\n"
-                f"Наталия💖\n"
-                f"__________________________\n"
-                f"После оплаты отправьте чек боту"
+                f"Реквизиты:\n2200701046225592\nТ-банк\nНаталия💖\n"
+                f"__________________________\nПосле оплаты отправьте чек боту"
             )
         else:
             video = next((v for v in VIDEOS if str(v['id']) == video_id), None)
@@ -238,14 +251,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"🎬 {video['title']}\n\n"
                 f"Способ оплаты: На карту Т-Банк\n"
                 f"К оплате: {video['price_str']} 🇷🇺RUB\n\n"
-                f"Реквизиты:\n"
-                f"2200701046225592\n"
-                f"Т-банк\n"
-                f"Наталия💖\n"
-                f"__________________________\n"
-                f"После оплаты отправьте чек боту"
+                f"Реквизиты:\n2200701046225592\nТ-банк\nНаталия💖\n"
+                f"__________________________\nПосле оплаты отправьте чек боту"
             )
-
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Я ОПЛАТИЛ", callback_data="paid")],
             [InlineKeyboardButton("👈 НАЗАД", callback_data="nav_0")]
@@ -261,25 +269,74 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "На скриншоте должны быть видны дата, время и сумма."
         )
 
-async def set_photo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def addvideo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_ID:
+        return
+    context.user_data['adding'] = {'step': 'title'}
+    await update.message.reply_text("➕ Новое видео.\n\nНапиши НАЗВАНИЕ:")
+
+async def dellast_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_ID:
+        return
+    deleted = delete_last_video()
+    if deleted:
+        await update.message.reply_text(f"🗑 Видео №{deleted} удалено.")
+    else:
+        await update.message.reply_text("Каталог пуст.")
+
+async def setphoto_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != ADMIN_ID:
         return
     parts = update.message.text.split()
     if len(parts) < 2:
-        await update.message.reply_text("Напиши так: /setphoto 1 — а потом отправь картинку")
+        await update.message.reply_text("Напиши: /setphoto 1 — потом отправь картинку")
         return
     context.user_data['setting_photo_for'] = parts[1]
-    await update.message.reply_text(f"Ок! Теперь отправь картинку для видео №{parts[1]}")
+    await update.message.reply_text(f"Ок! Отправь картинку для видео №{parts[1]}")
 
-async def set_video_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def setvideo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != ADMIN_ID:
         return
     parts = update.message.text.split()
     if len(parts) < 2:
-        await update.message.reply_text("Напиши так: /setvideo 1 — а потом отправь видео")
+        await update.message.reply_text("Напиши: /setvideo 1 — потом отправь видео")
         return
     context.user_data['setting_video_for'] = parts[1]
-    await update.message.reply_text(f"Ок! Теперь отправь видео для №{parts[1]}")
+    await update.message.reply_text(f"Ок! Отправь видео для №{parts[1]}")
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != ADMIN_ID:
+        return
+    adding = context.user_data.get('adding')
+    if not adding:
+        return
+    step = adding['step']
+    txt = update.message.text.strip()
+
+    if step == 'title':
+        adding['title'] = txt
+        adding['step'] = 'description'
+        await update.message.reply_text("Теперь напиши ОПИСАНИЕ:")
+    elif step == 'description':
+        adding['description'] = txt
+        adding['step'] = 'duration'
+        await update.message.reply_text("Длительность (например 10 минут):")
+    elif step == 'duration':
+        adding['duration'] = txt
+        adding['step'] = 'price'
+        await update.message.reply_text("Цена в рублях (только число, например 3000):")
+    elif step == 'price':
+        try:
+            price = int(txt.replace(" ", ""))
+        except ValueError:
+            await update.message.reply_text("Цена должна быть числом. Напиши ещё раз:")
+            return
+        new_id = add_video_db(adding['title'], adding['description'], adding['duration'], price)
+        context.user_data.pop('adding', None)
+        await update.message.reply_text(
+            f"✅ Видео №{new_id} добавлено!\n\n"
+            f"Теперь:\n/setphoto {new_id} — загрузить картинку\n/setvideo {new_id} — загрузить видеофайл"
+        )
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id == ADMIN_ID and context.user_data.get('setting_video_for'):
@@ -311,15 +368,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{user.id}_{buying}"),
         InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{user.id}")
     ]])
-
     try:
         await context.bot.send_photo(
-            chat_id=ADMIN_ID,
-            photo=photo.file_id,
-            caption=f"💳 Новый чек:\n\n"
-                    f"👤 {user.first_name} @{user.username or 'нет'}\n"
-                    f"ID: {user.id}\n"
-                    f"Покупка: {item_name}",
+            chat_id=ADMIN_ID, photo=photo.file_id,
+            caption=f"💳 Новый чек:\n\n👤 {user.first_name} @{user.username or 'нет'}\nID: {user.id}\nПокупка: {item_name}",
             reply_markup=keyboard
         )
         await update.message.reply_text("✅ Чек получен! Ожидайте подтверждения.")
@@ -342,15 +394,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         InlineKeyboardButton("✅ Одобрить", callback_data=f"approve_{user.id}_{buying}"),
         InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{user.id}")
     ]])
-
     try:
         await context.bot.send_document(
-            chat_id=ADMIN_ID,
-            document=doc.file_id,
-            caption=f"💳 Новый чек (документ):\n\n"
-                    f"👤 {user.first_name} @{user.username or 'нет'}\n"
-                    f"ID: {user.id}\n"
-                    f"Покупка: {item_name}",
+            chat_id=ADMIN_ID, document=doc.file_id,
+            caption=f"💳 Новый чек (документ):\n\n👤 {user.first_name} @{user.username or 'нет'}\nID: {user.id}\nПокупка: {item_name}",
             reply_markup=keyboard
         )
         await update.message.reply_text("✅ Чек получен! Ожидайте подтверждения.")
@@ -366,56 +413,38 @@ async def handle_approve_reject(update: Update, context: ContextTypes.DEFAULT_TY
 
     if action == "approve":
         video_id = data[2]
-
         if video_id == "bundle":
             add_purchase(user_id, 'bundle', BUNDLE_PRICE)
             for video in VIDEOS:
-                file_to_send = get_video_file(video['id']) or video['file_id']
-                if not file_to_send:
+                if not video['file_id']:
                     continue
                 try:
-                    await context.bot.send_video(
-                        chat_id=user_id,
-                        video=file_to_send,
-                        caption=f"🎬 {video['title']}\n⏱ {video['duration']}\n\nСпасибо за покупку! 🎉"
-                    )
+                    await context.bot.send_video(chat_id=user_id, video=video['file_id'],
+                        caption=f"🎬 {video['title']}\n⏱ {video['duration']}\n\nСпасибо за покупку! 🎉")
                 except Exception as e:
                     logger.error(f"Ошибка отправки видео: {e}")
         else:
             video = next((v for v in VIDEOS if str(v['id']) == video_id), None)
             if video:
                 add_purchase(user_id, video_id, video['price'])
-                file_to_send = get_video_file(video['id']) or video['file_id']
-                try:
-                    await context.bot.send_video(
-                        chat_id=user_id,
-                        video=file_to_send,
-                        caption=f"🎬 {video['title']}\n⏱ {video['duration']}\n\nСпасибо за покупку! 🎉"
-                    )
-                except Exception as e:
-                    logger.error(f"Ошибка отправки видео: {e}")
-
+                if video['file_id']:
+                    try:
+                        await context.bot.send_video(chat_id=user_id, video=video['file_id'],
+                            caption=f"🎬 {video['title']}\n⏱ {video['duration']}\n\nСпасибо за покупку! 🎉")
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки видео: {e}")
         try:
-            await query.edit_message_caption(
-                caption=query.message.caption + "\n\n✅ ОДОБРЕНО",
-                reply_markup=None
-            )
+            await query.edit_message_caption(caption=query.message.caption + "\n\n✅ ОДОБРЕНО", reply_markup=None)
         except Exception:
             pass
         await context.bot.send_message(chat_id=user_id, text="🎉 Оплата подтверждена! Видео отправлено выше.")
 
     elif action == "reject":
         try:
-            await query.edit_message_caption(
-                caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО",
-                reply_markup=None
-            )
+            await query.edit_message_caption(caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО", reply_markup=None)
         except Exception:
             pass
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="❌ Оплата не подтверждена.\nСвяжитесь с администратором."
-        )
+        await context.bot.send_message(chat_id=user_id, text="❌ Оплата не подтверждена.\nСвяжитесь с администратором.")
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != ADMIN_ID:
@@ -430,24 +459,25 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     revenue = row[1] or 0
     conn.close()
     await update.message.reply_text(
-        f"📊 СТАТИСТИКА\n\n"
-        f"👥 Пользователей: {users}\n"
-        f"💰 Покупок: {purchases}\n"
-        f"💵 Выручка: {revenue:,}₽"
+        f"📊 СТАТИСТИКА\n\n👥 Пользователей: {users}\n💰 Покупок: {purchases}\n💵 Выручка: {revenue:,}₽"
     )
 
 def main():
     init_db()
+    load_videos()
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", show_stats))
-    app.add_handler(CommandHandler("setphoto", set_photo_cmd))
-    app.add_handler(CommandHandler("setvideo", set_video_cmd))
+    app.add_handler(CommandHandler("addvideo", addvideo_cmd))
+    app.add_handler(CommandHandler("dellast", dellast_cmd))
+    app.add_handler(CommandHandler("setphoto", setphoto_cmd))
+    app.add_handler(CommandHandler("setvideo", setvideo_cmd))
     app.add_handler(MessageHandler(filters.Regex("^🎬 Каталог видео$"), show_catalog))
     app.add_handler(MessageHandler(filters.Regex("^📋 Мои покупки$"), show_my_purchases))
     app.add_handler(MessageHandler(filters.VIDEO, handle_video))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(handle_approve_reject, pattern="^(approve|reject)_"))
     app.add_handler(CallbackQueryHandler(handle_callback))
     logger.info("Бот запущен...")
