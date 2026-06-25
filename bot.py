@@ -20,6 +20,7 @@ VIDEOS = [
         "duration": "10 минут",
         "price": 3000,
         "price_str": "3 000",
+        "photo_id": "СЮДА_FILE_ID_КАРТИНКИ"
         "file_id": "AAMCAgADGQEDQS37ajyVePh8Jn534YBGHULxOJnKuccAAkqUAAJ6selJbdIHc_ZjXcQBAAdtAAM8BA"
     },
     # Добавь остальные видео по той же схеме
@@ -194,12 +195,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"После оплаты отправьте чек боту"
             )
         
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Я ОПЛАТИЛ", callback_data="paid")]])
+        keyboard = InlineKeyboardMarkup([
+    [InlineKeyboardButton("✅ Я ОПЛАТИЛ", callback_data="paid")],
+    [InlineKeyboardButton("👈 НАЗАД", callback_data="nav_0")]
+])
         await query.edit_message_text(text, reply_markup=keyboard)
     
     elif data == "paid":
         await query.edit_message_text(
-            "👌 Отправьте скриншот оплаты картинкой (не документом!)\n\n"
+            "👌 Отправьте скриншот оплаты картинкой \n\n"
             "На скриншоте должны быть видны дата, время и сумма."
         )
 
